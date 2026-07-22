@@ -48,6 +48,7 @@ def health():
         "engine_mode": "stub" if s.use_stub_engine else "live",
         "supabase": s.supabase_enabled,
         "stripe": s.stripe_enabled,
+        "sisal_proxy": bool(s.sisal_http_proxy),
     }
 
 

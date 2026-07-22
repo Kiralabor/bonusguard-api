@@ -20,6 +20,10 @@ class Settings:
         ).strip()
         self.max_workers = int(os.getenv("SISAL_MAX_WORKERS", "6"))
         self.cache_ttl_seconds = int(os.getenv("QUOTE_CACHE_TTL_SECONDS", "120"))
+        self.sisal_http_proxy = (
+            os.getenv("SISAL_HTTP_PROXY", "").strip()
+            or os.getenv("SISAL_PROXY_URL", "").strip()
+        )
 
         self.supabase_url = os.getenv("SUPABASE_URL", "").strip()
         self.supabase_service_role_key = os.getenv(

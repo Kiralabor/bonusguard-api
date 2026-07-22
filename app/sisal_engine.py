@@ -5,6 +5,7 @@ Usato solo dal backend BonusGuard. Non esporre questo modulo all'app Flutter.
 
 import csv
 import math
+import os
 import re
 import threading
 import time as time_module
@@ -523,7 +524,23 @@ def _opportunities_from_scheda_payload(
     return opportunities, event_refs
 
 
+def _sisal_proxy_url() -> str:
+    """Proxy di uscita per Sisal (es. IP italiano). Solo traffico Sisal."""
+    return (
+        os.getenv("SISAL_HTTP_PROXY", "").strip()
+        or os.getenv("SISAL_PROXY_URL", "").strip()
+    )
+
+
+def sisal_proxy_configured() -> bool:
+    return bool(_sisal_proxy_url())
+
+
 def _new_sisal_session() -> requests.Session:
+    proxy = _sisal_proxy_url()
+    if proxy:
+        # Preferisci IP IT/residenziale: Render da solo viene spesso bloccato (403).
+        return requests.Session(impersonate="chrome", proxy=proxy)
     return requests.Session(impersonate="chrome")
 
 
@@ -544,10 +561,14 @@ def format_sisal_error(exc: BaseException) -> str:
             "Riprova tra poco oppure scegli «Lenta (meno carico)»."
         )
     if "403" in lowered or "401" in lowered or "forbidden" in lowered:
+        if sisal_proxy_configured():
+            return (
+                "Sisal ha rifiutato la richiesta anche tramite proxy. "
+                "Verifica che il proxy sia italiano e funzionante."
+            )
         return (
-            "Sisal ha bloccato il server cloud (IP non residenziale). "
-            "Dal PC di casa funziona; online serve un proxy residenziale "
-            "oppure far girare la scansione sul tuo PC."
+            "Sisal ha bloccato l'IP del server (serve uscita da IP italiano). "
+            "Imposta SISAL_HTTP_PROXY su Render e riprova."
         )
     if "429" in lowered or "too many" in lowered:
         return (
