@@ -49,6 +49,7 @@ def health():
         "supabase": s.supabase_enabled,
         "stripe": s.stripe_enabled,
         "sisal_proxy": bool(s.sisal_http_proxy),
+        "sisal_worker": bool(s.sisal_worker_url),
     }
 
 

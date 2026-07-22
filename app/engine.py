@@ -103,17 +103,81 @@ def _fetch_opportunities(*, force_refresh: bool = False):
 
     # Worker limit server-side (non esposto all'app).
     eng.SISAL_API_WORKERS = max(1, settings.max_workers)
-    ops, errors = eng.fetch_sisal_calcio_opportunities(
-        catalog_mode=settings.catalog_mode,
-        include_extended=True,
-        max_workers=settings.max_workers,
-    )
+    if settings.sisal_worker_url:
+        ops, errors = _fetch_opportunities_via_it_worker(settings)
+    else:
+        ops, errors = eng.fetch_sisal_calcio_opportunities(
+            catalog_mode=settings.catalog_mode,
+            include_extended=True,
+            max_workers=settings.max_workers,
+        )
     with _CACHE_LOCK:
         _CACHE_OPS = list(ops)
         _CACHE_AT = time.time()
         _CACHE_ERRORS = int(errors)
         _persist_cache(_CACHE_OPS, _CACHE_ERRORS)
         return list(_CACHE_OPS), _CACHE_ERRORS, False
+
+
+def _fetch_opportunities_via_it_worker(settings) -> tuple[list, int]:
+    """Scarica opportunità tramite gateway con IP italiano (PC di casa)."""
+    import httpx
+
+    from . import sisal_engine as eng
+
+    if not settings.sisal_worker_secret:
+        raise RuntimeError(
+            "SISAL_WORKER_URL impostato ma manca SISAL_WORKER_SECRET."
+        )
+
+    url = f"{settings.sisal_worker_url}/scan"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(480.0, connect=30.0)) as client:
+            res = client.post(
+                url,
+                headers={"Authorization": f"Bearer {settings.sisal_worker_secret}"},
+                json={
+                    "catalog_mode": settings.catalog_mode,
+                    "include_extended": True,
+                    "max_workers": settings.max_workers,
+                },
+            )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            "Timeout verso il gateway italiano. "
+            "Verifica che il PC sia acceso e il tunnel attivo."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"Gateway italiano non raggiungibile: {exc}. "
+            "Avvia run_sisal_worker_it.bat sul PC."
+        ) from exc
+
+    if res.status_code >= 400:
+        detail = res.text
+        try:
+            detail = res.json().get("detail", detail)
+        except Exception:
+            pass
+        raise RuntimeError(f"Gateway IT errore {res.status_code}: {detail}")
+
+    payload = res.json()
+    ops = []
+    for item in payload.get("opportunities") or []:
+        ops.append(
+            eng.MarketOpportunity(
+                data=str(item.get("data") or ""),
+                ora=str(item.get("ora") or ""),
+                partita=str(item.get("partita") or ""),
+                mercato=str(item.get("mercato") or ""),
+                esiti=list(item.get("esiti") or []),
+                quote=[float(q) for q in (item.get("quote") or [])],
+                url=str(item.get("url") or ""),
+                pal=int(item.get("pal") or 0),
+                avv=int(item.get("avv") or 0),
+            )
+        )
+    return ops, int(payload.get("errors") or 0)
 
 
 def run_bonus_calculation(

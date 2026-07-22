@@ -24,6 +24,9 @@ class Settings:
             os.getenv("SISAL_HTTP_PROXY", "").strip()
             or os.getenv("SISAL_PROXY_URL", "").strip()
         )
+        # Gateway IT (PC/casa): Render scarica le quote da qui invece che da sé.
+        self.sisal_worker_url = os.getenv("SISAL_WORKER_URL", "").rstrip("/")
+        self.sisal_worker_secret = os.getenv("SISAL_WORKER_SECRET", "").strip()
 
         self.supabase_url = os.getenv("SUPABASE_URL", "").strip()
         self.supabase_service_role_key = os.getenv(
