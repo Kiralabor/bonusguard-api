@@ -544,7 +544,11 @@ def format_sisal_error(exc: BaseException) -> str:
             "Riprova tra poco oppure scegli «Lenta (meno carico)»."
         )
     if "403" in lowered or "401" in lowered or "forbidden" in lowered:
-        return "Sisal ha rifiutato la richiesta. Riprova tra qualche minuto."
+        return (
+            "Sisal ha bloccato il server cloud (IP non residenziale). "
+            "Dal PC di casa funziona; online serve un proxy residenziale "
+            "oppure far girare la scansione sul tuo PC."
+        )
     if "429" in lowered or "too many" in lowered:
         return (
             "Troppe richieste a Sisal. "
