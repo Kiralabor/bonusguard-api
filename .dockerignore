@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+.quote_cache.pkl
+_test_session.json
+scripts
+*.md
+.git
