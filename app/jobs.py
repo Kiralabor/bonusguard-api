@@ -95,11 +95,16 @@ def _pct_from_sisal(done: int, total: int, label: str) -> float:
 
 def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
     try:
-        _touch(job_id, "avvio scansione…", 2.0)
+        _touch(job_id, "Consulto le Quote", 2.0)
 
         def on_progress(done: int, total: int, label: str) -> None:
             pct = _pct_from_sisal(done, total, label)
-            _touch(job_id, label or "download quote…", pct)
+            label_l = (label or "").lower()
+            if "calcolo" in label_l:
+                display = label or "calcolo puntate…"
+            else:
+                display = "Consulto le Quote"
+            _touch(job_id, display, pct)
 
         results, notes, is_stub = run_bonus_calculation(
             bonus,
