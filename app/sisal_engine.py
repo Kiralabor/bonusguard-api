@@ -12,7 +12,12 @@ import time as time_module
 import traceback
 import unicodedata
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import dataclass
 from datetime import datetime, time
 from queue import Queue
@@ -854,6 +859,25 @@ def _catalog_meta_from_alberatura(alberatura: dict) -> Dict[str, dict]:
     }
 
 
+def _soft_progress_units(done_w: int, inflight_w: int, total_w: int, started_at: float) -> int:
+    """Stima avanzamento mentre le richieste parallele sono ancora in volo.
+
+    Evita la barra ferma per minuti: concede una frazione del peso in-flight
+    che cresce col tempo (cap ~55% del peso ancora aperto).
+    """
+    if total_w <= 0:
+        return 0
+    if inflight_w <= 0:
+        return min(done_w, total_w)
+    elapsed = max(0.0, time_module.time() - started_at)
+    # Dopo ~90s di lavoro in parallelo, la frazione soft arriva al massimo.
+    soft_frac = min(0.55, 0.08 + elapsed / 160.0)
+    soft = done_w + int(inflight_w * soft_frac)
+    if done_w < total_w:
+        soft = min(soft, total_w - 1)
+    return max(done_w, min(soft, total_w))
+
+
 def _fetch_events_prossimi_giorni(
     session_pool: Queue,
     alberatura: dict,
@@ -874,13 +898,18 @@ def _fetch_events_prossimi_giorni(
         day_filters = [1, 4, 3]
 
     catalog_meta = _catalog_meta_from_alberatura(alberatura)
-    total = len(day_filters)
+    # Peso uniforme per giornata (non abbiamo conteggi eventi affidabili qui).
+    weights = {day: 1 for day in day_filters}
+    total_w = sum(weights.values())
     chunks: List[Tuple[List[MarketOpportunity], List[EventRef]]] = []
     errors = 0
-    done = 0
-    _report_progress(progress_callback, 0, total, "elenco giornate")
+    done_w = 0
+    done_n = 0
+    total_n = len(day_filters)
+    started_at = time_module.time()
+    _report_progress(progress_callback, 0, total_w, "elenco giornate")
 
-    workers = max(1, min(int(max_workers), total))
+    workers = max(1, min(int(max_workers), total_n))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
@@ -888,15 +917,42 @@ def _fetch_events_prossimi_giorni(
             ): day_filter
             for day_filter in day_filters
         }
-        for future in as_completed(futures):
-            day_filter = futures[future]
-            done += 1
-            try:
-                chunks.append(future.result())
-                _report_progress(progress_callback, done, total, f"giornata {done}")
-            except Exception:
-                errors += 1
-                _report_progress(progress_callback, done, total, f"giornata {done} saltata")
+        pending = set(futures.keys())
+        while pending:
+            finished, pending = wait(
+                pending, timeout=2.0, return_when=FIRST_COMPLETED
+            )
+            if not finished:
+                pending_weights = sorted(
+                    (weights[futures[f]] for f in pending), reverse=True
+                )
+                # Solo i task davvero in esecuzione (~workers), non tutta la coda.
+                running_w = sum(pending_weights[:workers])
+                soft = _soft_progress_units(done_w, running_w, total_w, started_at)
+                _report_progress(
+                    progress_callback, soft, total_w, f"giornata {done_n}/{total_n}"
+                )
+                continue
+            for future in finished:
+                day_filter = futures[future]
+                done_n += 1
+                done_w += weights[day_filter]
+                try:
+                    chunks.append(future.result())
+                    _report_progress(
+                        progress_callback,
+                        done_w,
+                        total_w,
+                        f"giornata {done_n}/{total_n}",
+                    )
+                except Exception:
+                    errors += 1
+                    _report_progress(
+                        progress_callback,
+                        done_w,
+                        total_w,
+                        f"giornata {done_n}/{total_n} saltata",
+                    )
     collected, event_refs = _merge_scheda_results(chunks)
     return collected, event_refs, errors
 
@@ -919,13 +975,20 @@ def _fetch_events_palinsesto_completo(
         raise ValueError("Nessuna competizione calcio trovata sulle API Sisal.")
 
     catalog_meta = _catalog_meta_from_alberatura(alberatura)
-    total = len(competition_keys)
+    # Peso = n. eventi del torneo: Serie A avanza la barra più di un torneo da 2 partite.
+    weights = {
+        key: max(1, int(event_counts.get(key, 0) or 0)) for key in competition_keys
+    }
+    total_w = sum(weights.values())
     chunks: List[Tuple[List[MarketOpportunity], List[EventRef]]] = []
     errors = 0
-    done = 0
-    _report_progress(progress_callback, 0, total, "campionati")
+    done_w = 0
+    done_n = 0
+    total_n = len(competition_keys)
+    started_at = time_module.time()
+    _report_progress(progress_callback, 0, total_w, "campionati")
 
-    workers = max(1, min(int(max_workers), total))
+    workers = max(1, min(int(max_workers), total_n))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
@@ -933,15 +996,45 @@ def _fetch_events_palinsesto_completo(
             ): key
             for key in competition_keys
         }
-        for future in as_completed(futures):
-            key = futures[future]
-            done += 1
-            try:
-                chunks.append(future.result())
-                _report_progress(progress_callback, done, total, f"campionato {done}/{total}")
-            except Exception:
-                errors += 1
-                _report_progress(progress_callback, done, total, f"campionato {done}/{total} saltato")
+        pending = set(futures.keys())
+        while pending:
+            finished, pending = wait(
+                pending, timeout=2.0, return_when=FIRST_COMPLETED
+            )
+            if not finished:
+                pending_weights = sorted(
+                    (weights[futures[f]] for f in pending), reverse=True
+                )
+                # Solo i task davvero in esecuzione (~workers), non tutta la coda.
+                running_w = sum(pending_weights[:workers])
+                soft = _soft_progress_units(done_w, running_w, total_w, started_at)
+                _report_progress(
+                    progress_callback,
+                    soft,
+                    total_w,
+                    f"campionato {done_n}/{total_n}",
+                )
+                continue
+            for future in finished:
+                key = futures[future]
+                done_n += 1
+                done_w += weights[key]
+                try:
+                    chunks.append(future.result())
+                    _report_progress(
+                        progress_callback,
+                        done_w,
+                        total_w,
+                        f"campionato {done_n}/{total_n}",
+                    )
+                except Exception:
+                    errors += 1
+                    _report_progress(
+                        progress_callback,
+                        done_w,
+                        total_w,
+                        f"campionato {done_n}/{total_n} saltato",
+                    )
     collected, event_refs = _merge_scheda_results(chunks)
     return collected, event_refs, errors
 

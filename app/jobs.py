@@ -82,15 +82,19 @@ def _touch(
 
 
 def _pct_from_sisal(done: int, total: int, label: str) -> float:
-    """Mappa done/total Sisal su 5–92% (il resto è avvio/calcolo finale)."""
+    """Mappa done/total Sisal su percentuale UI.
+
+    Con catalogo base (niente dettaglio eventi) il download è ~tutto il lavoro:
+    usa 4–96%. Con fase dettaglio, catalogo 4–72% e dettaglio 72–96%.
+    """
     label_l = (label or "").lower()
     frac = 0.0 if total <= 0 else min(1.0, max(0.0, done / float(total)))
     if "calcolo" in label_l:
-        return 93.0 + frac * 5.0
+        return 96.0 + frac * 3.0
     if "dettaglio" in label_l:
-        return 70.0 + frac * 22.0
-    # Catalogo (giornate / campionati): gran parte del lavoro.
-    return 5.0 + frac * 65.0
+        return 72.0 + frac * 24.0
+    # Catalogo pesato per eventi (done/total = eventi scaricati / eventi totali).
+    return 4.0 + frac * 92.0
 
 
 def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
