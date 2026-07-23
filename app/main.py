@@ -5,6 +5,7 @@ from . import credits
 from . import jobs
 from .auth import resolve_user
 from .engine import has_quote_cache, run_bonus_calculation, utc_now
+from .sisal_engine import normalize_catalog_mode
 from .models import (
     CalculationJobStart,
     CalculationJobStatus,
@@ -54,9 +55,7 @@ def health():
         "sisal_proxy": bool(s.sisal_http_proxy),
         "sisal_worker": bool(s.sisal_worker_url),
         "catalog_mode": s.catalog_mode,
-        "catalog_resolved": __import__(
-            "app.sisal_engine", fromlist=["normalize_catalog_mode"]
-        ).normalize_catalog_mode(s.catalog_mode),
+        "catalog_resolved": normalize_catalog_mode(s.catalog_mode),
         "include_extended": s.include_extended,
     }
 
