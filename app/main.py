@@ -2,9 +2,12 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import credits
+from . import jobs
 from .auth import resolve_user
 from .engine import has_quote_cache, run_bonus_calculation, utc_now
 from .models import (
+    CalculationJobStart,
+    CalculationJobStatus,
     CalculationRequest,
     CalculationResponse,
     CreditPackage,
@@ -78,12 +81,12 @@ def packages():
     )
 
 
-@app.post("/calculations", response_model=CalculationResponse)
+@app.post("/calculations", response_model=CalculationJobStart)
 def calculations(
     body: CalculationRequest,
     authorization: str | None = Header(default=None),
 ):
-    """1 credito = 1 scansione estesa nuova."""
+    """1 credito = 1 scansione estesa nuova (job asincrono: evita timeout Render ~100s)."""
     user = _auth_user(authorization, body.access_token)
     _validate_bonus_form(body.bonus)
 
@@ -94,21 +97,24 @@ def calculations(
             detail="Crediti insufficienti. Acquista un pacchetto per calcolare.",
         )
 
-    try:
-        # 1 credito = 1 scansione nuova: non riusare la cache quote.
-        results, notes, is_stub = run_bonus_calculation(body.bonus, force_refresh=True)
-    except Exception as exc:
-        credits.refund_credit(user.user_id, 1)
-        left = credits.get_credits(user.user_id)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    job_id = jobs.start_calculation_job(user.user_id, body.bonus)
+    return CalculationJobStart(job_id=job_id, status="running", credits_left=left)
 
-    return CalculationResponse(
-        credits_left=left,
-        fetched_at=utc_now(),
-        mode="esteso",
-        stub=is_stub,
-        results=results,
-        notes=notes,
+
+@app.get("/calculations/jobs/{job_id}", response_model=CalculationJobStatus)
+def calculation_job_status(
+    job_id: str,
+    authorization: str | None = Header(default=None),
+):
+    user = _auth_user(authorization)
+    job = jobs.get_job(job_id)
+    if job is None or job.user_id != user.user_id:
+        raise HTTPException(status_code=404, detail="Job non trovato o scaduto.")
+    return CalculationJobStatus(
+        job_id=job.id,
+        status=job.status,
+        error=job.error,
+        result=job.response,
     )
 
 

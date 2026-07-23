@@ -69,6 +69,22 @@ class CalculationResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class CalculationJobStart(BaseModel):
+    job_id: str
+    status: str = "running"
+    credits_left: int
+    message: str = (
+        "Scansione avviata. Attendere: su Render Free può richiedere alcuni minuti."
+    )
+
+
+class CalculationJobStatus(BaseModel):
+    job_id: str
+    status: str
+    error: Optional[str] = None
+    result: Optional[CalculationResponse] = None
+
+
 class CreditPackage(BaseModel):
     id: str
     credits: int
