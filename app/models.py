@@ -82,6 +82,7 @@ class CalculationJobStatus(BaseModel):
     job_id: str
     status: str
     progress: str = ""
+    progress_pct: float = 0.0
     error: Optional[str] = None
     result: Optional[CalculationResponse] = None
 

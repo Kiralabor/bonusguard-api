@@ -21,6 +21,7 @@ class CalcJob:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     progress: str = "avvio"
+    progress_pct: float = 0.0
     error: Optional[str] = None
     response: Optional[CalculationResponse] = None
 
@@ -56,6 +57,7 @@ def job_to_public(job: CalcJob) -> dict[str, Any]:
         "job_id": job.id,
         "status": job.status,
         "progress": job.progress,
+        "progress_pct": job.progress_pct,
     }
     if job.error:
         out["error"] = job.error
@@ -64,19 +66,47 @@ def job_to_public(job: CalcJob) -> dict[str, Any]:
     return out
 
 
-def _touch(job_id: str, progress: str) -> None:
+def _touch(
+    job_id: str,
+    progress: str,
+    progress_pct: Optional[float] = None,
+) -> None:
     with _LOCK:
         job = _JOBS.get(job_id)
         if job and job.status == "running":
             job.progress = progress
+            if progress_pct is not None:
+                # Non tornare indietro: evita salti se Sisal cambia fase (catalogo → dettaglio).
+                job.progress_pct = max(float(job.progress_pct), float(progress_pct))
             job.updated_at = time.time()
+
+
+def _pct_from_sisal(done: int, total: int, label: str) -> float:
+    """Mappa done/total Sisal su 5–92% (il resto è avvio/calcolo finale)."""
+    label_l = (label or "").lower()
+    frac = 0.0 if total <= 0 else min(1.0, max(0.0, done / float(total)))
+    if "calcolo" in label_l:
+        return 93.0 + frac * 5.0
+    if "dettaglio" in label_l:
+        return 70.0 + frac * 22.0
+    # Catalogo (giornate / campionati): gran parte del lavoro.
+    return 5.0 + frac * 65.0
 
 
 def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
     try:
-        _touch(job_id, "download quote Sisal…")
-        results, notes, is_stub = run_bonus_calculation(bonus, force_refresh=True)
-        _touch(job_id, "calcolo puntate…")
+        _touch(job_id, "avvio scansione…", 2.0)
+
+        def on_progress(done: int, total: int, label: str) -> None:
+            pct = _pct_from_sisal(done, total, label)
+            _touch(job_id, label or "download quote…", pct)
+
+        results, notes, is_stub = run_bonus_calculation(
+            bonus,
+            force_refresh=True,
+            progress_callback=on_progress,
+        )
+        _touch(job_id, "preparo risultati…", 98.0)
         response = CalculationResponse(
             credits_left=credits.get_credits(user_id),
             fetched_at=utc_now(),
@@ -90,6 +120,7 @@ def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
             if job:
                 job.status = "done"
                 job.progress = "completato"
+                job.progress_pct = 100.0
                 job.updated_at = time.time()
                 job.response = response
     except Exception as exc:  # noqa: BLE001

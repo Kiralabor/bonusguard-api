@@ -7,11 +7,14 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .engine_stub import run_extended_calculation as run_stub
 from .models import BonusForm, StakeProposal
 from .settings import get_settings
+
+# done, total, label — stessa firma di sisal_engine.ProgressCallback
+ProgressCallback = Optional[Callable[[int, int, str], None]]
 
 _CACHE_LOCK = threading.Lock()
 _CACHE_OPS: list = []
@@ -80,7 +83,11 @@ def has_quote_cache() -> bool:
         return _load_disk_cache()
 
 
-def _fetch_opportunities(*, force_refresh: bool = False):
+def _fetch_opportunities(
+    *,
+    force_refresh: bool = False,
+    progress_callback: ProgressCallback = None,
+):
     """Scarica mercati Sisal.
 
     force_refresh=True: nuova scansione (calcolo a pagamento).
@@ -104,12 +111,17 @@ def _fetch_opportunities(*, force_refresh: bool = False):
     # Worker limit server-side (non esposto all'app).
     eng.SISAL_API_WORKERS = max(1, settings.max_workers)
     if settings.sisal_worker_url:
+        if progress_callback is not None:
+            progress_callback(0, 1, "download via gateway IT…")
         ops, errors = _fetch_opportunities_via_it_worker(settings)
+        if progress_callback is not None:
+            progress_callback(1, 1, "download completato")
     else:
         ops, errors = eng.fetch_sisal_calcio_opportunities(
             catalog_mode=settings.catalog_mode,
             include_extended=settings.include_extended,
             max_workers=settings.max_workers,
+            progress_callback=progress_callback,
         )
     with _CACHE_LOCK:
         _CACHE_OPS = list(ops)
@@ -184,6 +196,7 @@ def run_bonus_calculation(
     bonus: BonusForm,
     *,
     force_refresh: bool = True,
+    progress_callback: ProgressCallback = None,
 ) -> Tuple[List[StakeProposal], List[str], bool]:
     """Ritorna (results, notes, is_stub).
 
@@ -204,13 +217,18 @@ def run_bonus_calculation(
         )
 
     if settings.use_stub_engine:
+        if progress_callback is not None:
+            progress_callback(1, 1, "calcolo stub")
         results, stub_notes = run_stub(bonus)
         notes.extend(stub_notes)
         return results, notes, True
 
     from . import sisal_engine as eng
 
-    ops, errors, from_cache = _fetch_opportunities(force_refresh=force_refresh)
+    ops, errors, from_cache = _fetch_opportunities(
+        force_refresh=force_refresh,
+        progress_callback=progress_callback,
+    )
     notes.append(
         "Ritocco gratis sulla scansione già scaricata."
         if from_cache
@@ -220,6 +238,9 @@ def run_bonus_calculation(
         notes.append(
             f"Attenzione: {errors} richieste non scaricate (risultati possibili incompleti)."
         )
+
+    if progress_callback is not None:
+        progress_callback(0, 1, "calcolo puntate…")
 
     filtered = [
         item for item in ops if eng.opportunity_meets_minimum_odd(item, bonus.min_odd)
@@ -249,5 +270,8 @@ def run_bonus_calculation(
         raise ValueError(
             "Nessuna proposta con puntate valide per questo budget/step."
         )
+
+    if progress_callback is not None:
+        progress_callback(1, 1, "calcolo completato")
 
     return _rows_to_proposals(rows), notes, False

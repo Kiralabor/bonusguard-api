@@ -119,6 +119,7 @@ def calculation_job_status(
         job_id=job.id,
         status=job.status,
         progress=job.progress,
+        progress_pct=float(getattr(job, "progress_pct", 0.0) or 0.0),
         error=job.error,
         result=job.response if job.status == "done" else None,
     )
