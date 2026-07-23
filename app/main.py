@@ -57,6 +57,7 @@ def health():
         "catalog_mode": s.catalog_mode,
         "catalog_resolved": normalize_catalog_mode(s.catalog_mode),
         "include_extended": s.include_extended,
+        "quote_cache": has_quote_cache(),
     }
 
 
