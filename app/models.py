@@ -81,6 +81,7 @@ class CalculationJobStart(BaseModel):
 class CalculationJobStatus(BaseModel):
     job_id: str
     status: str
+    progress: str = ""
     error: Optional[str] = None
     result: Optional[CalculationResponse] = None
 

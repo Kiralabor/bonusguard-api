@@ -19,6 +19,8 @@ class CalcJob:
     user_id: str
     status: str = "running"  # running | done | error
     created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    progress: str = "avvio"
     error: Optional[str] = None
     response: Optional[CalculationResponse] = None
 
@@ -53,6 +55,7 @@ def job_to_public(job: CalcJob) -> dict[str, Any]:
     out: dict[str, Any] = {
         "job_id": job.id,
         "status": job.status,
+        "progress": job.progress,
     }
     if job.error:
         out["error"] = job.error
@@ -61,9 +64,19 @@ def job_to_public(job: CalcJob) -> dict[str, Any]:
     return out
 
 
+def _touch(job_id: str, progress: str) -> None:
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if job and job.status == "running":
+            job.progress = progress
+            job.updated_at = time.time()
+
+
 def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
     try:
+        _touch(job_id, "download quote Sisal…")
         results, notes, is_stub = run_bonus_calculation(bonus, force_refresh=True)
+        _touch(job_id, "calcolo puntate…")
         response = CalculationResponse(
             credits_left=credits.get_credits(user_id),
             fetched_at=utc_now(),
@@ -76,6 +89,8 @@ def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
             job = _JOBS.get(job_id)
             if job:
                 job.status = "done"
+                job.progress = "completato"
+                job.updated_at = time.time()
                 job.response = response
     except Exception as exc:  # noqa: BLE001
         credits.refund_credit(user_id, 1)
@@ -83,6 +98,8 @@ def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
             job = _JOBS.get(job_id)
             if job:
                 job.status = "error"
+                job.progress = "errore"
+                job.updated_at = time.time()
                 job.error = str(exc)
 
 

@@ -110,11 +110,13 @@ def calculation_job_status(
     job = jobs.get_job(job_id)
     if job is None or job.user_id != user.user_id:
         raise HTTPException(status_code=404, detail="Job non trovato o scaduto.")
+    # Mentre gira, non allegare payload pesanti (solo status).
     return CalculationJobStatus(
         job_id=job.id,
         status=job.status,
+        progress=job.progress,
         error=job.error,
-        result=job.response,
+        result=job.response if job.status == "done" else None,
     )
 
 
