@@ -16,9 +16,14 @@ class Settings:
         # stub = risultati fake; live = fetch Sisal reale
         self.engine_mode = os.getenv("ENGINE_MODE", "live").strip().lower()
         self.catalog_mode = os.getenv(
-            "CATALOG_MODE", "Solo prossimi giorni (veloce)"
+            "CATALOG_MODE", "Tutte le partite (più lento)"
         ).strip()
         self.max_workers = int(os.getenv("SISAL_MAX_WORKERS", "6"))
+        # 1/true = anche mercati estesi (eventDetail, più lento).
+        # 0/false = calcolo base (solo mercati da lista catalogo).
+        self.include_extended = os.getenv(
+            "SISAL_INCLUDE_EXTENDED", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self.cache_ttl_seconds = int(os.getenv("QUOTE_CACHE_TTL_SECONDS", "120"))
         self.sisal_http_proxy = (
             os.getenv("SISAL_HTTP_PROXY", "").strip()

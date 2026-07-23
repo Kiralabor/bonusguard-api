@@ -53,6 +53,8 @@ def health():
         "stripe": s.stripe_enabled,
         "sisal_proxy": bool(s.sisal_http_proxy),
         "sisal_worker": bool(s.sisal_worker_url),
+        "catalog_mode": s.catalog_mode,
+        "include_extended": s.include_extended,
     }
 
 

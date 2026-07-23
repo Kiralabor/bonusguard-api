@@ -108,7 +108,7 @@ def _fetch_opportunities(*, force_refresh: bool = False):
     else:
         ops, errors = eng.fetch_sisal_calcio_opportunities(
             catalog_mode=settings.catalog_mode,
-            include_extended=True,
+            include_extended=settings.include_extended,
             max_workers=settings.max_workers,
         )
     with _CACHE_LOCK:
@@ -138,7 +138,7 @@ def _fetch_opportunities_via_it_worker(settings) -> tuple[list, int]:
                 headers={"Authorization": f"Bearer {settings.sisal_worker_secret}"},
                 json={
                     "catalog_mode": settings.catalog_mode,
-                    "include_extended": True,
+                    "include_extended": settings.include_extended,
                     "max_workers": settings.max_workers,
                 },
             )
