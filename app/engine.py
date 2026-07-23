@@ -1,13 +1,14 @@
-"""Orchestrazione calcolo: stub oppure Sisal live + cache in RAM/disco."""
+"""Orchestrazione calcolo: stub oppure Sisal live + cache per utente."""
 
 from __future__ import annotations
 
 import pickle
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .engine_stub import run_extended_calculation as run_stub
 from .models import BonusForm, StakeProposal
@@ -17,86 +18,98 @@ from .settings import get_settings
 ProgressCallback = Optional[Callable[[int, int, str], None]]
 
 _CACHE_LOCK = threading.Lock()
-_CACHE_OPS: list = []
-_CACHE_AT: float = 0.0
-_CACHE_ERRORS: int = 0
-# Persistenza: i ritocchi gratis devono funzionare anche dopo reload uvicorn.
-_CACHE_FILE = Path(__file__).resolve().parent.parent / ".quote_cache.pkl"
+# user_id -> {ops, at, errors}
+_CACHE: Dict[str, dict] = {}
+_CACHE_DIR = Path(__file__).resolve().parent.parent / ".quote_cache"
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _persist_cache(ops: list, errors: int) -> None:
-    try:
-        _CACHE_FILE.write_bytes(
-            pickle.dumps({"ops": ops, "errors": int(errors), "at": time.time()}, protocol=4)
-        )
-    except Exception:
-        pass
+def _safe_user_key(user_id: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", user_id)[:120] or "anon"
 
 
-def _load_disk_cache() -> bool:
-    """Carica cache da disco in RAM se presente. Ritorna True se ok."""
-    global _CACHE_OPS, _CACHE_AT, _CACHE_ERRORS
-    if not _CACHE_FILE.exists():
-        return False
-    try:
-        data = pickle.loads(_CACHE_FILE.read_bytes())
-        ops = list(data.get("ops") or [])
-        if not ops:
-            return False
-        _CACHE_OPS = ops
-        _CACHE_AT = float(data.get("at") or time.time())
-        _CACHE_ERRORS = int(data.get("errors") or 0)
-        return True
-    except Exception:
-        return False
+def _cache_path(user_id: str) -> Path:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _CACHE_DIR / f"{_safe_user_key(user_id)}.pkl"
 
 
 def _cache_ttl_seconds() -> int:
     return max(0, int(get_settings().cache_ttl_seconds))
 
 
-def _clear_cache_locked() -> None:
-    """Svuota RAM + file. Richiede _CACHE_LOCK."""
-    global _CACHE_OPS, _CACHE_AT, _CACHE_ERRORS
-    _CACHE_OPS = []
-    _CACHE_AT = 0.0
-    _CACHE_ERRORS = 0
+def _persist_cache(user_id: str, entry: dict) -> None:
     try:
-        if _CACHE_FILE.exists():
-            _CACHE_FILE.unlink()
+        _cache_path(user_id).write_bytes(pickle.dumps(entry, protocol=4))
     except Exception:
         pass
 
 
-def _cache_is_fresh_locked() -> bool:
-    """True se c'è una scansione ancora entro TTL. Richiede _CACHE_LOCK."""
-    if not _CACHE_OPS and not _load_disk_cache():
-        return False
+def _load_disk_cache(user_id: str) -> Optional[dict]:
+    path = _cache_path(user_id)
+    if not path.exists():
+        return None
+    try:
+        data = pickle.loads(path.read_bytes())
+        ops = list(data.get("ops") or [])
+        if not ops:
+            return None
+        return {
+            "ops": ops,
+            "at": float(data.get("at") or time.time()),
+            "errors": int(data.get("errors") or 0),
+        }
+    except Exception:
+        return None
+
+
+def _clear_user_cache_locked(user_id: str) -> None:
+    _CACHE.pop(user_id, None)
+    try:
+        path = _cache_path(user_id)
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _entry_fresh(entry: dict) -> bool:
     ttl = _cache_ttl_seconds()
-    if ttl > 0 and (time.time() - _CACHE_AT) > ttl:
-        _clear_cache_locked()
+    if ttl > 0 and (time.time() - float(entry.get("at") or 0)) > ttl:
         return False
-    return bool(_CACHE_OPS)
+    return bool(entry.get("ops"))
 
 
-def has_quote_cache() -> bool:
+def _get_fresh_entry_locked(user_id: str) -> Optional[dict]:
+    entry = _CACHE.get(user_id)
+    if entry is None:
+        entry = _load_disk_cache(user_id)
+        if entry is not None:
+            _CACHE[user_id] = entry
+    if entry is None:
+        return None
+    if not _entry_fresh(entry):
+        _clear_user_cache_locked(user_id)
+        return None
+    return entry
+
+
+def has_quote_cache(user_id: str) -> bool:
     with _CACHE_LOCK:
-        return _cache_is_fresh_locked()
+        return _get_fresh_entry_locked(user_id) is not None
 
 
-def quote_cache_remaining_sec() -> int:
-    """Secondi rimasti prima della scadenza (0 se assente/scaduta)."""
+def quote_cache_remaining_sec(user_id: str) -> int:
     with _CACHE_LOCK:
-        if not _cache_is_fresh_locked():
+        entry = _get_fresh_entry_locked(user_id)
+        if entry is None:
             return 0
         ttl = _cache_ttl_seconds()
         if ttl <= 0:
             return 0
-        return max(0, int(ttl - (time.time() - _CACHE_AT)))
+        return max(0, int(ttl - (time.time() - float(entry["at"]))))
 
 
 def _rows_to_proposals(rows: list) -> List[StakeProposal]:
@@ -121,22 +134,19 @@ def _rows_to_proposals(rows: list) -> List[StakeProposal]:
 
 
 def _fetch_opportunities(
+    user_id: str,
     *,
     force_refresh: bool = False,
     progress_callback: ProgressCallback = None,
 ):
-    """Scarica mercati Sisal.
-
-    force_refresh=True: nuova scansione (calcolo a pagamento).
-    force_refresh=False: solo cache della scansione già pagata (ritocchi gratis).
-    """
+    """Scarica mercati Sisal. Cache isolata per user_id."""
     settings = get_settings()
-    global _CACHE_OPS, _CACHE_AT, _CACHE_ERRORS
 
     if not force_refresh:
         with _CACHE_LOCK:
-            if _cache_is_fresh_locked():
-                return list(_CACHE_OPS), _CACHE_ERRORS, True
+            entry = _get_fresh_entry_locked(user_id)
+            if entry is not None:
+                return list(entry["ops"]), int(entry["errors"]), True
         raise ValueError(
             "Scansione scaduta o assente (validità 1 ora). "
             "Esegui un nuovo Calcola (1 credito)."
@@ -144,7 +154,6 @@ def _fetch_opportunities(
 
     from . import sisal_engine as eng
 
-    # Worker limit server-side (non esposto all'app).
     eng.SISAL_API_WORKERS = max(1, settings.max_workers)
     if settings.sisal_worker_url:
         if progress_callback is not None:
@@ -159,12 +168,15 @@ def _fetch_opportunities(
             max_workers=settings.max_workers,
             progress_callback=progress_callback,
         )
+    entry = {
+        "ops": list(ops),
+        "at": time.time(),
+        "errors": int(errors),
+    }
     with _CACHE_LOCK:
-        _CACHE_OPS = list(ops)
-        _CACHE_AT = time.time()
-        _CACHE_ERRORS = int(errors)
-        _persist_cache(_CACHE_OPS, _CACHE_ERRORS)
-        return list(_CACHE_OPS), _CACHE_ERRORS, False
+        _CACHE[user_id] = entry
+        _persist_cache(user_id, entry)
+        return list(entry["ops"]), int(entry["errors"]), False
 
 
 def _fetch_opportunities_via_it_worker(settings) -> tuple[list, int]:
@@ -178,18 +190,16 @@ def _fetch_opportunities_via_it_worker(settings) -> tuple[list, int]:
             "SISAL_WORKER_URL impostato ma manca SISAL_WORKER_SECRET."
         )
 
-    url = f"{settings.sisal_worker_url}/scan"
+    url = f"{settings.sisal_worker_url}/fetch"
+    headers = {"X-Worker-Secret": settings.sisal_worker_secret}
+    payload = {
+        "catalog_mode": settings.catalog_mode,
+        "include_extended": settings.include_extended,
+        "max_workers": settings.max_workers,
+    }
     try:
-        with httpx.Client(timeout=httpx.Timeout(480.0, connect=30.0)) as client:
-            res = client.post(
-                url,
-                headers={"Authorization": f"Bearer {settings.sisal_worker_secret}"},
-                json={
-                    "catalog_mode": settings.catalog_mode,
-                    "include_extended": settings.include_extended,
-                    "max_workers": settings.max_workers,
-                },
-            )
+        with httpx.Client(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
+            res = client.post(url, json=payload, headers=headers)
     except httpx.TimeoutException as exc:
         raise RuntimeError(
             "Timeout verso il gateway italiano. "
@@ -231,14 +241,11 @@ def _fetch_opportunities_via_it_worker(settings) -> tuple[list, int]:
 def run_bonus_calculation(
     bonus: BonusForm,
     *,
+    user_id: str,
     force_refresh: bool = True,
     progress_callback: ProgressCallback = None,
 ) -> Tuple[List[StakeProposal], List[str], bool]:
-    """Ritorna (results, notes, is_stub).
-
-    force_refresh=True (default): nuova scansione Sisal — usato da /calculations a pagamento.
-    force_refresh=False: riusa cache — solo per ritocchi gratis sulla stessa analisi.
-    """
+    """Ritorna (results, notes, is_stub). Cache per utente."""
     settings = get_settings()
     notes: List[str] = []
 
@@ -262,6 +269,7 @@ def run_bonus_calculation(
     from . import sisal_engine as eng
 
     ops, errors, from_cache = _fetch_opportunities(
+        user_id,
         force_refresh=force_refresh,
         progress_callback=progress_callback,
     )

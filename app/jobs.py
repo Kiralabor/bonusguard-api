@@ -112,6 +112,7 @@ def _run_job(job_id: str, user_id: str, bonus: BonusForm) -> None:
 
         results, notes, is_stub = run_bonus_calculation(
             bonus,
+            user_id=user_id,
             force_refresh=True,
             progress_callback=on_progress,
         )

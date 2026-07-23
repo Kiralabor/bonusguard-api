@@ -1,4 +1,4 @@
-"""Stripe Checkout (test). Accredito crediti solo via webhook firmato."""
+"""Stripe Checkout. Accredito crediti solo via webhook firmato + idempotente."""
 
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ def create_checkout_session(user_id: str, package_id: str) -> dict:
     settings = get_settings()
     if not settings.stripe_enabled:
         raise RuntimeError("Stripe non configurato (STRIPE_SECRET_KEY mancante).")
+    if not settings.stripe_webhook_secret and not settings.allow_dev_credit_topup:
+        raise RuntimeError(
+            "Stripe webhook non configurato (STRIPE_WEBHOOK_SECRET mancante)."
+        )
 
     pack = credits.package_by_id(package_id)
     if not pack:
@@ -22,7 +26,6 @@ def create_checkout_session(user_id: str, package_id: str) -> dict:
 
     price_id = os.getenv(pack["stripe_price_env"], "").strip()
     if not price_id:
-        # Fallback: prezzo ad-hoc in centesimi (solo test, senza Price creato in Dashboard)
         return _checkout_with_price_data(user_id, pack)
 
     data = {
@@ -72,12 +75,16 @@ def _stripe_form_post(path: str, data: dict) -> dict:
 
 
 def handle_webhook(payload: bytes, sig_header: Optional[str]) -> dict[str, Any]:
-    """Verifica firma se presente secret; accredita crediti su checkout.session.completed."""
+    """Verifica firma obbligatoria in prod; accredita una sola volta per session.id."""
     settings = get_settings()
     import json
 
     if settings.stripe_webhook_secret:
-        _verify_stripe_signature(payload, sig_header or "", settings.stripe_webhook_secret)
+        _verify_stripe_signature(
+            payload, sig_header or "", settings.stripe_webhook_secret
+        )
+    elif not settings.allow_dev_credit_topup:
+        raise PermissionError("STRIPE_WEBHOOK_SECRET obbligatorio in produzione.")
 
     event = json.loads(payload.decode("utf-8"))
     etype = event.get("type")
@@ -88,11 +95,21 @@ def handle_webhook(payload: bytes, sig_header: Optional[str]) -> dict[str, Any]:
     meta = session.get("metadata") or {}
     user_id = meta.get("user_id") or session.get("client_reference_id")
     credits_raw = meta.get("credits")
-    if not user_id or not credits_raw:
+    session_id = str(session.get("id") or "")
+    if not user_id or not credits_raw or not session_id:
         return {"ok": False, "error": "metadata mancante"}
 
+    reason = f"stripe:{session_id}"
+    if credits.ledger_has_reason(user_id, reason):
+        return {
+            "ok": True,
+            "duplicate": True,
+            "user_id": user_id,
+            "credits": credits.get_credits(user_id),
+        }
+
     amount = int(credits_raw)
-    left = credits.add_credits(user_id, amount, reason=f"stripe:{session.get('id')}")
+    left = credits.add_credits(user_id, amount, reason=reason)
     return {"ok": True, "user_id": user_id, "added": amount, "credits": left}
 
 

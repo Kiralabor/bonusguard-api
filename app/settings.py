@@ -43,13 +43,39 @@ class Settings:
         self.stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "").strip()
         self.stripe_webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
         self.stripe_success_url = os.getenv(
-            "STRIPE_SUCCESS_URL", "https://example.com/success"
+            "STRIPE_SUCCESS_URL",
+            "https://bonusguard-api.onrender.com/billing/success",
         ).strip()
         self.stripe_cancel_url = os.getenv(
-            "STRIPE_CANCEL_URL", "https://example.com/cancel"
+            "STRIPE_CANCEL_URL",
+            "https://bonusguard-api.onrender.com/billing/cancel",
         ).strip()
 
-        self.allow_dev_credit_topup = os.getenv("ALLOW_DEV_CREDIT_TOPUP", "1") == "1"
+        # Produzione: default OFF. Locale: ALLOW_DEV_CREDIT_TOPUP=1 nel .env
+        self.allow_dev_credit_topup = (
+            os.getenv("ALLOW_DEV_CREDIT_TOPUP", "0").strip() == "1"
+        )
+
+        # CORS: lista separata da virgola, o * (solo se DEV)
+        raw_origins = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+        if raw_origins:
+            self.cors_allow_origins = [
+                o.strip() for o in raw_origins.split(",") if o.strip()
+            ]
+        elif self.allow_dev_credit_topup:
+            self.cors_allow_origins = ["*"]
+        else:
+            self.cors_allow_origins = [
+                "https://bonusguard-api.onrender.com",
+                "com.kiralab.bonusguard://",
+            ]
+
+        self.rate_limit_calc_per_min = int(
+            os.getenv("RATE_LIMIT_CALC_PER_MIN", "6")
+        )
+        self.rate_limit_auth_per_min = int(
+            os.getenv("RATE_LIMIT_AUTH_PER_MIN", "30")
+        )
 
     @property
     def use_stub_engine(self) -> bool:
@@ -62,3 +88,8 @@ class Settings:
     @property
     def stripe_enabled(self) -> bool:
         return bool(self.stripe_secret_key)
+
+    @property
+    def stripe_ready(self) -> bool:
+        """Checkout utilizzabile in prod: secret + webhook secret."""
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)

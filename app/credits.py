@@ -175,10 +175,15 @@ def try_consume_credit(user_id: str, amount: int = 1) -> Tuple[bool, int]:
     return _local_consume(user_id, amount)
 
 
+_LOCAL_REASONS: set[str] = set()
+
+
 def add_credits(user_id: str, amount: int, reason: str = "manual") -> int:
     if get_settings().supabase_enabled and user_id != DEV_USER_ID:
         return _supabase_add(user_id, amount, reason)
-    return _local_add(user_id, amount)
+    left = _local_add(user_id, amount)
+    _LOCAL_REASONS.add(f"{user_id}|{reason}")
+    return left
 
 
 def refund_credit(user_id: str, amount: int = 1) -> int:
@@ -190,3 +195,70 @@ def package_by_id(package_id: str) -> Optional[dict]:
         if p["id"] == package_id:
             return p
     return None
+
+
+def ledger_has_reason(user_id: str, reason: str) -> bool:
+    """True se quel reason è già in ledger (idempotenza Stripe / welcome)."""
+    if get_settings().supabase_enabled and user_id != DEV_USER_ID:
+        settings = get_settings()
+        headers = _supabase_headers()
+        with httpx.Client(timeout=20) as client:
+            res = client.get(
+                f"{settings.supabase_url}/rest/v1/credit_ledger",
+                headers=headers,
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "reason": f"eq.{reason}",
+                    "select": "id",
+                    "limit": "1",
+                },
+            )
+            if res.status_code != 200:
+                return False
+            return bool(res.json())
+    key = f"{user_id}|{reason}"
+    return key in _LOCAL_REASONS
+
+
+def mark_phone_verified(user_id: str, phone: Optional[str] = None) -> None:
+    if not get_settings().supabase_enabled or user_id == DEV_USER_ID:
+        return
+    settings = get_settings()
+    payload: dict = {"phone_verified": True}
+    if phone:
+        payload["phone"] = phone
+    with httpx.Client(timeout=20) as client:
+        client.patch(
+            f"{settings.supabase_url}/rest/v1/profiles",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{user_id}"},
+            json=payload,
+        )
+
+
+def grant_welcome_credit(user_id: str) -> int:
+    """+1 welcome una sola volta (RPC Supabase o store locale)."""
+    reason = "welcome_phone_verified"
+    if ledger_has_reason(user_id, reason):
+        return get_credits(user_id)
+
+    if get_settings().supabase_enabled and user_id != DEV_USER_ID:
+        settings = get_settings()
+        headers = _supabase_headers()
+        mark_phone_verified(user_id)
+        with httpx.Client(timeout=20) as client:
+            res = client.post(
+                f"{settings.supabase_url}/rest/v1/rpc/grant_welcome_credit",
+                headers=headers,
+                json={"p_user": user_id},
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, int):
+                    return data
+                if isinstance(data, list) and data:
+                    return int(data[0] or 0)
+                return get_credits(user_id)
+        return add_credits(user_id, 1, reason=reason)
+
+    return add_credits(user_id, 1, reason=reason)

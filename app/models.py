@@ -9,6 +9,8 @@ class MeResponse(BaseModel):
     email: Optional[str] = None
     credits: int
     phone_verified: bool = False
+    quote_cache: bool = False
+    quote_cache_remaining_sec: int = 0
 
 
 class BonusForm(BaseModel):

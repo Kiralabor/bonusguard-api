@@ -15,12 +15,32 @@ services:
       - key: SISAL_MAX_WORKERS
         value: "6"
       - key: QUOTE_CACHE_TTL_SECONDS
-        value: "120"
+        value: "3600"
       - key: ALLOW_DEV_CREDIT_TOPUP
         value: "0"
+      - key: RATE_LIMIT_CALC_PER_MIN
+        value: "6"
+      - key: RATE_LIMIT_AUTH_PER_MIN
+        value: "30"
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      - key: STRIPE_SUCCESS_URL
+        value: https://bonusguard-api.onrender.com/billing/success
+      - key: STRIPE_CANCEL_URL
+        value: https://bonusguard-api.onrender.com/billing/cancel
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: SISAL_HTTP_PROXY
+        sync: false
+      - key: SISAL_WORKER_URL
+        sync: false
+      - key: SISAL_WORKER_SECRET
         sync: false
