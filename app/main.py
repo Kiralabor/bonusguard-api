@@ -204,6 +204,38 @@ async def billing_webhook(
     return result
 
 
+@app.get("/dev/sisal-probe")
+def sisal_probe():
+    """Diagnostica connessione Sisal dal server (proxy incluso)."""
+    if not get_settings().allow_dev_credit_topup:
+        raise HTTPException(status_code=403, detail="Probe disabilitato.")
+    from . import sisal_engine as eng
+
+    proxy = eng._sisal_proxy_url()
+    try:
+        session = eng._new_sisal_session()
+        alberatura = eng._load_alberatura(session)
+        keys = (
+            (alberatura.get("manifestazioneListByDisciplinaTutti") or {}).get(
+                eng.SISAL_CALCIO_DISCIPLINA, []
+            )
+            or []
+        )
+        return {
+            "ok": True,
+            "proxy": proxy or None,
+            "competizioni": len(keys),
+            "bytes_hint": len(str(alberatura)),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "proxy": proxy or None,
+            "error": str(exc),
+            "friendly": eng.format_sisal_error(exc),
+        }
+
+
 @app.post("/dev/add-credits")
 def dev_add_credits(amount: int = 5, authorization: str | None = Header(default=None)):
     """Solo sviluppo: ricarica crediti senza Stripe."""

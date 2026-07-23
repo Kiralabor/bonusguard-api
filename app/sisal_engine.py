@@ -556,22 +556,79 @@ def _opportunities_from_scheda_payload(
     return opportunities, event_refs
 
 
-def _sisal_proxy_url() -> str:
-    """Proxy di uscita per Sisal (es. IP italiano). Solo traffico Sisal."""
-    return (
+def _sisal_proxy_candidates() -> List[str]:
+    """Lista proxy da SISAL_HTTP_PROXY (uno o più, separati da virgola)."""
+    raw = (
         os.getenv("SISAL_HTTP_PROXY", "").strip()
         or os.getenv("SISAL_PROXY_URL", "").strip()
     )
+    if not raw:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+    for part in raw.replace(";", ",").split(","):
+        p = part.strip()
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _sisal_proxy_url() -> str:
+    """Proxy primario di uscita per Sisal."""
+    cands = _sisal_proxy_candidates()
+    return cands[0] if cands else ""
 
 
 def sisal_proxy_configured() -> bool:
-    return bool(_sisal_proxy_url())
+    return bool(_sisal_proxy_candidates())
+
+
+_PROXY_LOCK = threading.Lock()
+_ACTIVE_PROXY: Optional[str] = None
+
+
+def _pick_working_proxy() -> Optional[str]:
+    """Sceglie il primo proxy che apre alberaturaPrematch (con cache in-process)."""
+    global _ACTIVE_PROXY
+    cands = _sisal_proxy_candidates()
+    if not cands:
+        return None
+    with _PROXY_LOCK:
+        ordered = list(cands)
+        if _ACTIVE_PROXY in ordered:
+            ordered = [_ACTIVE_PROXY] + [p for p in ordered if p != _ACTIVE_PROXY]
+        last_err: Optional[BaseException] = None
+        for proxy in ordered:
+            try:
+                session = requests.Session(impersonate="chrome", proxy=proxy)
+                payload = _session_get_json(
+                    session,
+                    f"{SISAL_API_PREMATCH_BASE}/alberaturaPrematch",
+                    timeout=25,
+                    retries=1,
+                )
+                if isinstance(payload, dict) and payload:
+                    _ACTIVE_PROXY = proxy
+                    return proxy
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                continue
+        if last_err is not None:
+            raise last_err
+        return cands[0]
 
 
 def _new_sisal_session() -> requests.Session:
-    proxy = _sisal_proxy_url()
+    cands = _sisal_proxy_candidates()
+    if not cands:
+        return requests.Session(impersonate="chrome")
+    # Preferisci IP IT/residenziale: Render da solo viene spesso bloccato (403).
+    try:
+        proxy = _pick_working_proxy()
+    except Exception:
+        proxy = cands[0]
     if proxy:
-        # Preferisci IP IT/residenziale: Render da solo viene spesso bloccato (403).
         return requests.Session(impersonate="chrome", proxy=proxy)
     return requests.Session(impersonate="chrome")
 
