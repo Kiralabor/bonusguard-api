@@ -83,6 +83,33 @@ DOPPIA_CHANCE_PAIRS = (
 CATALOG_MODE_FAST = "Solo prossimi giorni (veloce)"
 CATALOG_MODE_FULL = "Tutte le partite (più lento)"
 CATALOG_MODE_CHOICES = (CATALOG_MODE_FAST, CATALOG_MODE_FULL)
+
+
+def normalize_catalog_mode(catalog_mode: str) -> str:
+    """Accetta etichette UI o alias ASCII (all/full/next) senza dipendere da accenti."""
+    raw = (catalog_mode or "").strip()
+    key = (
+        unicodedata.normalize("NFKD", raw)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .lower()
+    )
+    key = " ".join(key.split())
+    if key in {"all", "full", "tutte", "tutte le partite", "tutte le partite (piu lento)"}:
+        return CATALOG_MODE_FULL
+    if key in {
+        "next",
+        "next_days",
+        "fast",
+        "prossimi",
+        "solo prossimi giorni (veloce)",
+    }:
+        return CATALOG_MODE_FAST
+    if "tutte" in key:
+        return CATALOG_MODE_FULL
+    if "prossimi" in key:
+        return CATALOG_MODE_FAST
+    return raw or CATALOG_MODE_FAST
 CALC_MODE_BASE = "base"
 CALC_MODE_EXTENDED = "esteso"
 CALC_MODE_LABELS = {
@@ -932,6 +959,7 @@ def fetch_sisal_calcio_opportunities(
     Restituisce (opportunità, richieste fallite dopo i retry).
     """
     workers = max(1, int(max_workers))
+    catalog_mode = normalize_catalog_mode(catalog_mode)
     bootstrap = _new_sisal_session()
     try:
         alberatura = _load_alberatura(bootstrap)

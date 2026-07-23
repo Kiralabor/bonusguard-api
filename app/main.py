@@ -54,6 +54,9 @@ def health():
         "sisal_proxy": bool(s.sisal_http_proxy),
         "sisal_worker": bool(s.sisal_worker_url),
         "catalog_mode": s.catalog_mode,
+        "catalog_resolved": __import__(
+            "app.sisal_engine", fromlist=["normalize_catalog_mode"]
+        ).normalize_catalog_mode(s.catalog_mode),
         "include_extended": s.include_extended,
     }
 

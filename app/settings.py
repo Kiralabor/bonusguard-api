@@ -15,9 +15,8 @@ class Settings:
     def __init__(self) -> None:
         # stub = risultati fake; live = fetch Sisal reale
         self.engine_mode = os.getenv("ENGINE_MODE", "live").strip().lower()
-        self.catalog_mode = os.getenv(
-            "CATALOG_MODE", "Tutte le partite (più lento)"
-        ).strip()
+        # Preferisci alias ASCII su Render: all | next_days
+        self.catalog_mode = os.getenv("CATALOG_MODE", "all").strip() or "all"
         self.max_workers = int(os.getenv("SISAL_MAX_WORKERS", "6"))
         # 1/true = anche mercati estesi (eventDetail, più lento).
         # 0/false = calcolo base (solo mercati da lista catalogo).
