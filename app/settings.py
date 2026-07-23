@@ -23,7 +23,8 @@ class Settings:
         self.include_extended = os.getenv(
             "SISAL_INCLUDE_EXTENDED", "0"
         ).strip().lower() in {"1", "true", "yes", "on"}
-        self.cache_ttl_seconds = int(os.getenv("QUOTE_CACHE_TTL_SECONDS", "120"))
+        # Durata scansione pagata (ritocchi/riapertura gratis). Default 1 ora.
+        self.cache_ttl_seconds = int(os.getenv("QUOTE_CACHE_TTL_SECONDS", "3600"))
         self.sisal_http_proxy = (
             os.getenv("SISAL_HTTP_PROXY", "").strip()
             or os.getenv("SISAL_PROXY_URL", "").strip()

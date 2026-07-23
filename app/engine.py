@@ -55,6 +55,50 @@ def _load_disk_cache() -> bool:
         return False
 
 
+def _cache_ttl_seconds() -> int:
+    return max(0, int(get_settings().cache_ttl_seconds))
+
+
+def _clear_cache_locked() -> None:
+    """Svuota RAM + file. Richiede _CACHE_LOCK."""
+    global _CACHE_OPS, _CACHE_AT, _CACHE_ERRORS
+    _CACHE_OPS = []
+    _CACHE_AT = 0.0
+    _CACHE_ERRORS = 0
+    try:
+        if _CACHE_FILE.exists():
+            _CACHE_FILE.unlink()
+    except Exception:
+        pass
+
+
+def _cache_is_fresh_locked() -> bool:
+    """True se c'è una scansione ancora entro TTL. Richiede _CACHE_LOCK."""
+    if not _CACHE_OPS and not _load_disk_cache():
+        return False
+    ttl = _cache_ttl_seconds()
+    if ttl > 0 and (time.time() - _CACHE_AT) > ttl:
+        _clear_cache_locked()
+        return False
+    return bool(_CACHE_OPS)
+
+
+def has_quote_cache() -> bool:
+    with _CACHE_LOCK:
+        return _cache_is_fresh_locked()
+
+
+def quote_cache_remaining_sec() -> int:
+    """Secondi rimasti prima della scadenza (0 se assente/scaduta)."""
+    with _CACHE_LOCK:
+        if not _cache_is_fresh_locked():
+            return 0
+        ttl = _cache_ttl_seconds()
+        if ttl <= 0:
+            return 0
+        return max(0, int(ttl - (time.time() - _CACHE_AT)))
+
+
 def _rows_to_proposals(rows: list) -> List[StakeProposal]:
     out: List[StakeProposal] = []
     for row in rows:
@@ -76,13 +120,6 @@ def _rows_to_proposals(rows: list) -> List[StakeProposal]:
     return out
 
 
-def has_quote_cache() -> bool:
-    with _CACHE_LOCK:
-        if _CACHE_OPS:
-            return True
-        return _load_disk_cache()
-
-
 def _fetch_opportunities(
     *,
     force_refresh: bool = False,
@@ -98,12 +135,11 @@ def _fetch_opportunities(
 
     if not force_refresh:
         with _CACHE_LOCK:
-            if _CACHE_OPS:
-                return list(_CACHE_OPS), _CACHE_ERRORS, True
-            if _load_disk_cache():
+            if _cache_is_fresh_locked():
                 return list(_CACHE_OPS), _CACHE_ERRORS, True
         raise ValueError(
-            "Nessuna scansione in memoria. Torna indietro ed esegui un nuovo Calcola (1 credito)."
+            "Scansione scaduta o assente (validità 1 ora). "
+            "Esegui un nuovo Calcola (1 credito)."
         )
 
     from . import sisal_engine as eng

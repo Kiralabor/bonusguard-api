@@ -4,7 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import credits
 from . import jobs
 from .auth import resolve_user
-from .engine import has_quote_cache, run_bonus_calculation, utc_now
+from .engine import (
+    has_quote_cache,
+    quote_cache_remaining_sec,
+    run_bonus_calculation,
+    utc_now,
+)
 from .sisal_engine import normalize_catalog_mode
 from .models import (
     CalculationJobStart,
@@ -58,6 +63,8 @@ def health():
         "catalog_resolved": normalize_catalog_mode(s.catalog_mode),
         "include_extended": s.include_extended,
         "quote_cache": has_quote_cache(),
+        "quote_cache_ttl_sec": s.cache_ttl_seconds,
+        "quote_cache_remaining_sec": quote_cache_remaining_sec(),
     }
 
 
@@ -152,7 +159,7 @@ def calculations_rerank(
     if not has_quote_cache():
         raise HTTPException(
             status_code=409,
-            detail="Scansione scaduta o assente. Esegui un nuovo Calcola (1 credito).",
+            detail="Scansione scaduta o assente (validità 1 ora). Esegui un nuovo Calcola (1 credito).",
         )
 
     try:
